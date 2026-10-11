@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMART PARKING — ZONE A</title>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+:root{--bg:#07111f;--panel:#0e1b2d;--panel2:#12243a;--text:#eef6ff;--muted:#91a6bd;--green:#27d17f;--red:#ff5d68;--yellow:#ffc857;--blue:#55aaff;--line:#243a55}
+*{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 50% 0,#17365b 0,#07111f 42%,#050b13 100%);font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif;color:var(--text)}
+.wrap{max-width:1200px;margin:auto;padding:24px}.head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+h1{margin:0;font-size:30px}.sub{color:var(--muted);margin-top:4px}.status{padding:9px 14px;border-radius:999px;background:#4a2430;color:#ff9da4;font-weight:700}.status.on{background:#123c2b;color:#79f0ad}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.card{background:linear-gradient(145deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 10px 30px #0005}.big{font-size:34px;font-weight:800}.muted{color:var(--muted);font-size:13px}.wide{grid-column:span 2}.slots{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:12px}.slot{border:1px solid var(--line);border-radius:16px;padding:18px 10px;text-align:center;background:#102138}.slot .ico{font-size:34px}.slot.free{border-color:#176f4b;background:#0c3025}.slot.busy{border-color:#8b3038;background:#32151a}.label{font-weight:700;margin-top:7px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--yellow)}
+.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.gate{font-size:22px;font-weight:800}.bar{height:10px;background:#091421;border-radius:99px;overflow:hidden;margin-top:12px}.bar>i{display:block;height:100%;background:var(--green);width:0;transition:.25s}
+.lcd{background:#102914;border:5px solid #273327;border-radius:10px;padding:15px;font-family:"Courier New",monospace;color:#b7ff83;box-shadow:inset 0 0 25px #000;font-size:18px;line-height:1.55;min-height:142px;white-space:pre}
+pre{white-space:pre-wrap;word-break:break-word;margin:0;color:#bcd0e6;font-size:12px}.log{max-height:260px;overflow:auto;background:#08111d;border-radius:12px;padding:10px}
+.form{display:grid;grid-template-columns:1fr 1fr;gap:10px}.form label{font-size:12px;color:var(--muted)}input,button{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#081522;color:var(--text);font:inherit}button{cursor:pointer;background:#15558e;border-color:#287bc1;font-weight:700}button:hover{filter:brightness(1.12)}.full{grid-column:1/-1}
+.small{font-size:12px;color:var(--muted);line-height:1.55}
+.rbtn{display:inline-flex;align-items:center;justify-content:center;align-self:center;width:38px;height:38px;border-radius:8px;border:1px solid var(--line);background:#0b1626;color:var(--muted);text-decoration:none;font-weight:800;font-size:18px}.rbtn:hover{color:var(--yellow);border-color:var(--yellow)}
+.dur{margin-top:6px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-height:16px}.dur.over{color:var(--yellow);font-weight:700}.slot.over{border-color:#b8860b;background:#3a2a08}.slot.prob{border-color:var(--red);background:#4b1119;box-shadow:inset 0 0 0 1px var(--red)}
+@media(max-width:850px){.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}}
+@media(max-width:560px){.wrap{padding:14px}.grid{grid-template-columns:1fr}.wide{grid-column:span 1}.slots{grid-template-columns:repeat(2,1fr)}.head{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div><h1>🚗 SMART PARKING — ZONE A</h1><div class="sub">ESP32 + MQTT Dashboard</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div id="board" class="status">● ESP32 OFFLINE</div>
+      <div id="conn" class="status">● DISCONNECTED</div>
+      <a id="reportBtn" class="rbtn" href="#" target="_blank" rel="noopener" title="แจ้งปัญหาลานจอดรถผ่าน LINE" aria-label="แจ้งปัญหาผ่าน LINE">!</a>
+    </div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <div class="muted">ที่จอดว่าง</div><div id="free" class="big">— / 4</div>
+      <div class="bar"><i id="bar"></i></div>
+    </section>
+    <section class="card">
+      <div class="muted">รถภายใน</div><div id="inside" class="big">—</div>
+      <div class="small">นับจาก pass เข้า / ออก</div>
+    </section>
+    <section class="card">
+      <div class="muted">รถกำลังรอเข้า</div><div id="pending" class="big">—</div>
+      <div class="small">pending จาก ESP32</div>
+    </section>
+    <section class="card">
+      <div class="muted">สถานะการเชื่อมต่อ</div><div id="last" class="big" style="font-size:22px">—</div>
+      <div class="small" id="lastTime">ยังไม่มีข้อมูล</div>
+    </section>
+
+    <section class="card wide">
+      <div class="row"><div><div class="muted">ช่องจอด</div><h2 style="margin:4px 0">A1 — A4</h2></div><div id="zoneMsg" class="muted">รอข้อมูล...</div></div>
+      <div class="slots">
+        <div id="A1" class="slot"><div class="ico">🅿️</div><div class="label">A1</div><div class="state">—</div></div>
+        <div id="A2" class="slot"><div class="ico">🅿️</div><div class="label">A2</div><div class="state">—</div></div>
+        <div id="A3" class="slot"><div class="ico">🅿️</div><div class="label">A3</div><div class="state">—</div></div>
+        <div id="A4" class="slot"><div class="ico">🅿️</div><div class="label">A4</div><div class="state">—</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="muted">ไม้กั้นทางเข้า</div><div id="entryGate" class="gate">CLOSED</div>
+      <div class="small">S1: <b id="s1">—</b> &nbsp; S2: <b id="s2">—</b></div>
+      <div class="small">ผ่านเข้า: <b id="passIn">0</b></div>
+      <div id="entryAlert" class="warn" style="margin-top:10px">ไม่มีแจ้งเตือน</div>
+    </section>
+
+    <section class="card">
+      <div class="muted">ไม้กั้นทางออก</div><div id="exitGate" class="gate">CLOSED</div>
+      <div class="small">Sensor: <b id="sx">—</b></div>
+      <div class="small">ผ่านออก: <b id="passOut">0</b></div>
+      <div id="exitAlert" class="warn" style="margin-top:10px">ไม่มีแจ้งเตือน</div>
+    </section>
+
+    <section class="card wide">
+      <div class="muted">LCD 20×4 จำลอง</div>
+      <div class="lcd" id="lcd"><div>SMART PARKING ZONE A</div><div>Waiting for MQTT...</div><div>--------------------</div><div>WELCOME</div></div>
+    </section>
+
+    <section class="card full">
+      <div class="row"><div><div class="muted">MQTT SETTINGS</div><h2 style="margin:4px 0 14px">ตั้งค่าการเชื่อมต่อ</h2></div></div>
+      <div class="form">
+        <div><label>WebSocket URL</label><input id="url" value="wss://broker.hivemq.com:8884/mqtt"></div>
+        <div><label>Topic หลัก (BASE)</label><input id="base" value="project_parking_8392"></div>
+        <div><label>Zone</label><input id="zone" value="A"></div>
+        <div><label>Client ID</label><input id="clientId"></div>
+        <button id="connect">เชื่อมต่อ MQTT</button>
+        <button id="disconnect" style="background:#5a2630;border-color:#883a47">ตัดการเชื่อมต่อ</button>
+        <div class="small full">เว็บนี้อ่านข้อมูลจาก ESP32 อย่างเดียว ไม่ส่งคำสั่งควบคุมไม้กั้นกลับไปยัง ESP32</div>
+      </div>
+    </section>
+
+    <section class="card full">
+      <div class="row"><div><div class="muted">MQTT LOG</div><h2 style="margin:4px 0 12px">ข้อมูลล่าสุด</h2></div><button id="clearLog" style="width:auto;padding:8px 14px">ล้าง Log</button></div>
+      <div id="log" class="log"><pre>ยังไม่มีข้อความ</pre></div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let client = null;
+let logLines = [];
+
+function log(msg){
+  const t = new Date().toLocaleTimeString('th-TH');
+  logLines.unshift(`[${t}] ${msg}`);
+  logLines = logLines.slice(0,100);
+  $('log').innerHTML = '<pre>'+logLines.join('\n').replace(/</g,'&lt;')+'</pre>';
+}
+// ===== ปุ่มแจ้งปัญหา → LINE OA =====
+// ใส่ลิงก์ LINE OA ของคุณที่นี่ (รูปแบบ https://line.me/R/ti/p/@ไอดีOA)
+const LINE_OA_URL = 'https://line.me/R/ti/p/@735xbezo';
+$('reportBtn').href = LINE_OA_URL;
+
+// ===== เวลาจอดของแต่ละช่อง =====
+const OVER_SEC = 24*3600;            // จอดเกิน 24 ชม. = แจ้งเตือน/เปลี่ยนสี
+let slotT = [0,0,0,0], slotAt = 0;
+let prevBusy=[false,false,false,false], prevT=[0,0,0,0], baseT=[0,0,0,0], seenOnce=false;  // ใช้ตรวจว่ารถคันใหม่เข้ามา → เริ่มนับเวลาใหม่   // วินาทีที่จอดมาแล้ว (ค่าจากบอร์ด) และเวลาที่ได้รับค่านั้น
+function fmtDur(sec){
+  const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), s=sec%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+function renderDur(){
+  const add = slotAt ? Math.floor((Date.now()-slotAt)/1000) : 0;
+  let over = 0;
+  for(let i=0;i<4;i++){
+    const el=$('A'+(i+1));
+    let du=el.querySelector('.dur');
+    if(!du){ du=document.createElement('div'); du.className='dur'; el.appendChild(du); }
+    if(slotT[i]>0){
+      const sec=slotT[i]+add, isOver=sec>=OVER_SEC;
+      if(isOver) over++;
+      du.textContent=(isOver?'⚠ เกิน 24 ชม. ':'⏱ ')+fmtDur(sec);
+      du.className='dur'+(isOver?' over':'');
+      el.classList.toggle('over', isOver);
+    } else { du.textContent=''; du.className='dur'; el.classList.remove('over'); }
+  }
+  return over;
+}
+setInterval(()=>{ if(boardOn) renderDur(); },1000);   // ให้ตัวเลขเดินทุกวินาที
+
+// แปลงข้อความแจ้งเตือนจากบอร์ดเป็นภาษาไทย (ถ้าไม่รู้จัก จะแสดงข้อความเดิม)
+const ALERT_TH = {
+  'STRADDLE': 'จอดคร่อมช่อง',
+  'TAILGATE': 'ขับจี้ท้าย',
+  'LOT FULL': 'ที่จอดเต็ม',
+  'ENTRY TIMEOUT': 'รถไม่ผ่าน ไม้กั้นปิดเอง'
+};
+function alertText(a){ return '⚠ ' + (ALERT_TH[a] || a); }
+
+function setConn(on, text){ $('conn').textContent='● '+text; $('conn').className='status'+(on?' on':''); if(!on){ lastData=0; setBoard(false); } }
+function base(){ return $('base').value.trim().replace(/\/+$/,''); }
+function topics(){
+  const b=base(), z=$('zone').value.trim() || 'A';
+  return {zone:`${b}/zone/${z}`, in:`${b}/gate/in`, out:`${b}/gate/out`, lcd:`${b}/lcd`};
+}
+function subAll(){
+  const t=topics();
+  client.subscribe([t.zone,t.in,t.out,t.lcd], {qos:0}, err=>{
+    if(err) log('Subscribe ERROR: '+err.message);
+    else log('Subscribed: '+Object.values(t).join(', '));
+  });
+}
+function connect(){
+  if(client){ try{client.end(true)}catch(e){} }
+  const url=$('url').value.trim();
+  const opts={clientId: $('clientId').value.trim() || ('web-'+Math.random().toString(16).slice(2,10)), clean:true, reconnectPeriod:3000};
+  log('Connecting → '+url);
+  client=mqtt.connect(url,opts);
+  client.on('connect',()=>{ setConn(true,'CONNECTED'); lastData=0; log('MQTT connected'); subAll(); });
+  client.on('reconnect',()=>{setConn(false,'RECONNECTING'); log('Reconnecting...')});
+  client.on('close',()=>{setConn(false,'DISCONNECTED'); log('MQTT closed')});
+  client.on('error',e=>{setConn(false,'ERROR'); log('MQTT ERROR: '+e.message)});
+  client.on('message',(topic,payload)=>{
+    const raw=payload.toString();
+    lastData=Date.now(); setBoard(true);
+    $('lastTime').textContent='ข้อมูลล่าสุด '+new Date().toLocaleTimeString('th-TH');
+    log(topic+' ← '+raw);
+    handle(topic,raw);
+  });
+}
+
+// ตรวจว่าข้อมูลช่องจอดสลับไปมาผิดปกติ (เปลี่ยนค่า ≥4 ครั้งใน 15 วินาที) → คืนรายการค่า s ที่สลับกัน
+let zoneHist=[];
+function flapInfo(sv){
+  const now=Date.now();
+  zoneHist.push({t:now,s:sv});
+  zoneHist=zoneHist.filter(x=>now-x.t<=15000);
+  let flips=0;
+  for(let i=1;i<zoneHist.length;i++) if(zoneHist[i].s!==zoneHist[i-1].s) flips++;
+  return flips>=4 ? [...new Set(zoneHist.map(x=>x.s))] : null;
+}
+// ทำให้ค่าช่องจอดนิ่ง: ถ้าข้อมูลสลับไปมา ให้เลือกค่าเดียวที่สมเหตุสมผลที่สุด (จำนวนช่องที่มีรถใกล้เคียงรถในลานตามตัวนับ pass)
+let flapAt=0, flapLogAt=0, lastZoneAt=0;
+function stabilize(sv){
+  const flap=flapInfo(sv);
+  if(!flap) return {s:sv, flap:null};
+  const now=Date.now();
+  const recent=[...new Set(zoneHist.filter(x=>now-x.t<=3000).map(x=>x.s))];
+  if(recent.length<=1) return {s:sv, flap:null};          // เลิกสลับแล้ว ใช้ค่าล่าสุดตามจริง
+  const cnt=v=>[...v].filter(c=>c==='1').length;
+  recent.sort((a,b)=>cnt(b)-cnt(a));            // เซนเซอร์เจอรถ น่าเชื่อกว่าเซนเซอร์ที่ 'หลุด' → เลือกค่าที่มีรถมากกว่า (ไม่อิงตัวนับ pass เพราะวางโมเดลลงช่องตรงๆ ตัวนับจะไม่ตรง)
+  flapAt=now;
+  return {s:recent[0], flap};
+}
+// จำนวนรถในลานจากตัวนับ pass เข้า − ออก (null = ยังไม่มีข้อมูล)
+function carsInside(){
+  const a=parseInt($('passIn').textContent,10), b=parseInt($('passOut').textContent,10);
+  return (isNaN(a)||isNaN(b)) ? null : Math.max(0,a-b);
+}
+// หาคู่ช่องติดกันที่รถคันเดียวจอดคร่อม
+//  1) คู่ที่เคยตรวจเจอแล้ว จะ 'ค้างสถานะไว้' จนกว่ารถคันนั้นจะออกจริง (ช่องใดช่องหนึ่งว่างต่อเนื่อง 3 รอบ)
+//     → รถคันใหม่ที่ผ่านไม้กั้นเข้ามา หรือบอร์ดเลิกส่งธง ไม่ทำให้สถานะหาย
+//  2) ช่องที่บอร์ดธงใน p → จับคู่กับช่องติดกันที่มีรถ (เลือกช่องที่เวลาจอดใกล้กันที่สุด) ถ้าไม่มีช่องติดกันที่มีรถ = ไม่นับ
+//  3) ถ้า (ช่องที่มีรถ) > (รถในลาน) ต่อเนื่องหลายรอบ แสดงว่ามีรถคร่อมอีก → เลือกคู่ติดกันที่เวลาจอดตรงกันที่สุด
+const STRADDLE_MAX_GAP=20;   // วินาที: รถคันเดียวจอดคร่อม → เวลาจอดของสองช่องต้องห่างกันไม่เกินนี้
+let excessStreak=0;
+let stickyPairs=[];   // [{a,b,miss}]
+function findStraddle(busy, pRaw, cars, occ){
+  const used=[false,false,false,false], pairs=[];
+  const diff=(i,j)=>Math.abs((slotT[i]||0)-(slotT[j]||0));
+  const near=(i,j)=>diff(i,j)<=STRADDLE_MAX_GAP;
+  const take=(i,j)=>{ used[i]=used[j]=true; pairs.push([Math.min(i,j),Math.max(i,j)]); };
+
+  // 1) คู่เดิมที่ยังจอดอยู่
+  const keep=[];
+  stickyPairs.forEach(sp=>{
+    if(busy[sp.a] && busy[sp.b]){
+      if(!near(sp.a,sp.b)) return;              // เวลาจอดห่างเกิน 20 วิ = คนละคัน ปล่อยคู่นี้
+      sp.miss=0; keep.push(sp); if(!used[sp.a]&&!used[sp.b]) take(sp.a,sp.b);
+    }
+    else if(++sp.miss<3){ keep.push(sp); }      // ช่องว่างชั่วคราว (เซนเซอร์กระพริบ) ยังไม่ปล่อยทันที
+  });
+
+  // 2) ธงจากบอร์ด
+  for(let i=0;i<4;i++){
+    if(pRaw[i]!=='1' || !busy[i] || used[i]) continue;
+    const cand=[i-1,i+1].filter(j=>j>=0&&j<4&&busy[j]&&!used[j]&&near(i,j));
+    if(!cand.length) continue;
+    cand.sort((x,y)=>(pRaw[y]==='1')-(pRaw[x]==='1') || diff(i,x)-diff(i,y));
+    take(i,cand[0]);
+  }
+
+  // 3) จำนวนช่องที่มีรถเกินจำนวนรถจริง
+  const excess = cars===null ? 0 : occ-cars;
+  excessStreak = excess>pairs.length ? excessStreak+1 : 0;
+  if(excessStreak>=3){                              // ต้องเจอต่อเนื่อง 3 รอบ กันค่านับเพี้ยนชั่วคราว
+    const cands=[0,1,2].filter(i=>busy[i]&&busy[i+1]&&!used[i]&&!used[i+1]&&near(i,i+1)).sort((x,y)=>diff(x,x+1)-diff(y,y+1));
+    for(const i of cands){
+      if(pairs.length>=excess) break;
+      if(!used[i]&&!used[i+1]) take(i,i+1);
+    }
+  }
+
+  // จำคู่ทั้งหมดไว้สำหรับรอบถัดไป
+  const next=keep.filter(sp=>!pairs.some(([x,y])=>x===sp.a&&y===sp.b)&&sp.miss>0);   // คู่ที่รอปล่อย (ยังไม่แสดง)
+  pairs.forEach(([x,y])=>{ const old=keep.find(sp=>sp.a===x&&sp.b===y); next.push({a:x,b:y,miss:old?old.miss:0}); });
+  stickyPairs=next;
+  return pairs;
+}
+
+function handle(topic,raw){
+  let d; try{d=JSON.parse(raw)}catch(e){return}
+  const t=topics();
+  if(topic===t.zone && d.s){
+    const st0=stabilize(String(d.s));
+    const s=st0.s; lastZoneAt=Date.now();
+    const busy=[0,1,2,3].map(i=>s[i]==='1');
+    const occ=busy.filter(Boolean).length;
+    for(let i=0;i<4;i++){
+      const el=$('A'+(i+1));
+      el.className='slot '+(busy[i]?'busy':'free');
+      el.querySelector('.ico').textContent=busy[i]?'🚙':'🅿️';
+      el.querySelector('.state').textContent=busy[i]?'มีรถ':'ว่าง';
+      el.querySelector('.state').className='state '+(busy[i]?'bad':'ok');
+    }
+    // --- เวลาจอดของแต่ละช่อง (ต้องคำนวณก่อน เพราะใช้จับคู่ช่องที่คร่อม) ---
+    if(Array.isArray(d.t)){
+      const raw=d.t.slice(0,4).map(n=>Number(n)||0);
+      slotT=raw.map((n,i)=>{
+        if(!busy[i]){ prevBusy[i]=false; prevT[i]=0; baseT[i]=0; return 0; }   // ช่องว่าง = ล้างเวลา
+        if(!prevBusy[i] && seenOnce) baseT[i]=n;      // เพิ่งมีรถเข้าช่องนี้ → เริ่มนับจาก 0 (ตัดค่าเก่าที่บอร์ดค้างไว้)
+        else if(n<prevT[i]) baseT[i]=0;               // บอร์ดรีเซ็ตเวลาเอง
+        prevBusy[i]=true; prevT[i]=n;
+        return Math.max(0,n-baseT[i]);
+      });
+      slotAt=Date.now(); seenOnce=true;
+    }
+    // --- ตรวจจอดคร่อม: จอดคร่อมได้เฉพาะ 'สองช่องที่ติดกัน' เท่านั้น ---
+    const pairs=findStraddle(busy, String(d.p||''), carsInside(), occ);
+    pairs.forEach(([a,b])=>{
+      [a,b].forEach(i=>{
+        const el=$('A'+(i+1)); el.classList.add('prob');
+        el.querySelector('.ico').textContent='⚠️';
+        const st=el.querySelector('.state');
+        st.textContent='มีปัญหา: จอดคร่อม A'+(a+1)+'–A'+(b+1); st.className='state bad';
+      });
+    });
+    // ถ้ามีธง STRADDLE จากบอร์ดแต่หาคู่ช่องติดกันไม่ได้ → ไม่แสดง (เป็นไปไม่ได้ทางกายภาพ)
+    const alertVal = pairs.length ? (d.alert||'STRADDLE') : (d.alert==='STRADDLE' ? '' : d.alert);
+    const free=4-occ;
+    $('free').textContent=free+' / 4';
+    $('bar').style.width=(free/4*100)+'%';
+    if(alertVal){ $('zoneMsg').textContent=alertText(alertVal); $('zoneMsg').className='bad'; }
+    else { $('zoneMsg').textContent=free===0?'PARKING FULL':'มีที่ว่าง'; $('zoneMsg').className='muted'; }
+    const over=renderDur();
+    const flap=st0.flap;
+    if(flap){
+      if(!alertVal){ $('zoneMsg').textContent=(free===0?'PARKING FULL':'มีที่ว่าง')+' (ข้อมูลจากบอร์ดไม่นิ่ง)'; $('zoneMsg').className='warn'; }
+      if(Date.now()-flapLogAt>10000){ flapLogAt=Date.now(); log('⚠ ข้อมูล zone สลับไปมา: '+flap.join(' ↔ ')+' — แสดงค่า '+s+' ที่สมเหตุสมผลที่สุด (ตรวจเฟิร์มแวร์/บอร์ดที่ส่งซ้ำ)'); }
+    }
+    else if(over>0 && !alertVal){ $('zoneMsg').textContent='⚠ จอดเกิน 24 ชม. '+over+' คัน'; $('zoneMsg').className='warn'; }
+  }
+  if(topic===t.in){
+    $('s1').textContent=d.sensor?'รถพบ':'ว่าง';
+    $('s2').textContent=d.sensor2?'รถผ่าน':'ว่าง';
+    $('entryGate').textContent=d.servo>=45?'OPEN':'CLOSED';
+    $('entryGate').className='gate '+(d.servo>=45?'ok':'');
+    $('passIn').textContent=d.pass ?? 0;
+    $('pending').textContent=d.pending ?? 0;
+    $('entryAlert').textContent=d.alert?alertText(d.alert):'ไม่มีแจ้งเตือน';
+    $('entryAlert').className=d.alert?'bad':'ok';
+    $('inside').textContent=Math.max(0,(Number($('passIn').textContent)||0)-(Number($('passOut').textContent)||0));
+  }
+  if(topic===t.out){
+    $('sx').textContent=d.sensor?'รถพบ':'ว่าง';
+    $('exitGate').textContent=d.servo>=45?'OPEN':'CLOSED';
+    $('exitGate').className='gate '+(d.servo>=45?'ok':'');
+    $('passOut').textContent=d.pass ?? 0;
+    $('exitAlert').textContent=d.alert?alertText(d.alert):'ไม่มีแจ้งเตือน';
+    $('exitAlert').className=d.alert?'bad':'ok';
+    $('inside').textContent=Math.max(0,(Number($('passIn').textContent)||0)-(Number($('passOut').textContent)||0));
+  }
+  if(topic===t.lcd && Array.isArray(d.lines)){
+    if(Date.now()-lastZoneAt<3000){              // มีข้อมูลช่องจอดสดอยู่ → ใช้เป็นตัวตัดสิน LCD
+      const txt=d.lines.map(x=>String(x)).join('\n');
+      const m=/Free Slots:\s*(\d+)\s*\/\s*4/.exec(txt);
+      const fr=parseInt(($('free').textContent||'').split('/')[0],10);
+      let bad = m && !isNaN(fr) && parseInt(m[1],10)!==fr;
+      const pm=/P1:.*P4:\S/.exec(txt);
+      if(pm && !isNaN(fr)){
+        const xs=(pm[0].match(/:X/g)||[]).length;
+        if(xs!==4-fr) bad=true;
+      }
+      if(bad) return;                           // LCD ขัดกับช่องจอดจริง → ข้าม ไม่เปลี่ยนจอ
+    }
+    $('lcd').innerHTML=d.lines.slice(0,4).map(x=>'<div>'+String(x).replace(/</g,'&lt;')+'</div>').join('');
+  }
+}
+// ===== สถานะบอร์ด ESP32 =====
+let lastData = 0;      // เวลาที่ได้รับข้อมูลล่าสุด (0 = ยังไม่มีข้อมูล)
+let boardOn = null;
+const OFFLINE_AFTER_MS = 6000;   // ไม่มีข้อมูลเกินเวลานี้ = ถือว่าบอร์ดดับ
+
+function resetUI(){
+  $('free').textContent='— / 4'; $('bar').style.width='0';
+  $('zoneMsg').textContent='ไม่มีข้อมูลจาก ESP32'; $('zoneMsg').className='muted';
+  for(let i=1;i<=4;i++){
+    const el=$('A'+i); el.className='slot';
+    el.querySelector('.ico').textContent='🅿️';
+    const st=el.querySelector('.state'); st.textContent='—'; st.className='state';
+  }
+  $('inside').textContent='—'; $('pending').textContent='—';
+  ['s1','s2','sx'].forEach(id=>$(id).textContent='—');
+  ['entryGate','exitGate'].forEach(id=>{ $(id).textContent='—'; $(id).className='gate'; });
+  $('passIn').textContent='—'; $('passOut').textContent='—';
+  ['entryAlert','exitAlert'].forEach(id=>{ $(id).textContent='ไม่มีข้อมูล'; $(id).className='warn'; });
+  $('lcd').innerHTML='<div>ESP32 OFFLINE</div><div>No data...</div>';
+  slotT=[0,0,0,0]; slotAt=0; prevBusy=[false,false,false,false]; prevT=[0,0,0,0]; baseT=[0,0,0,0]; seenOnce=false; excessStreak=0; stickyPairs=[]; zoneHist=[]; renderDur();
+}
+function setBoard(on){
+  if(on===boardOn) return;
+  boardOn=on;
+  $('board').textContent='● ESP32 '+(on?'ONLINE':'OFFLINE');
+  $('board').className='status'+(on?' on':'');
+  $('last').textContent=on?'ESP32 ONLINE':'ESP32 OFFLINE';
+  if(!on) resetUI();
+}
+setInterval(()=>{
+  if(lastData && Date.now()-lastData>OFFLINE_AFTER_MS){ lastData=0; setBoard(false); }
+},1000);
+setBoard(false);
+
+$('connect').onclick=connect;
+$('disconnect').onclick=()=>{if(client){client.end(true);client=null} setConn(false,'DISCONNECTED');log('Disconnected by user')};
+$('clearLog').onclick=()=>{logLines=[];$('log').innerHTML='<pre>ยังไม่มีข้อความ</pre>'};
+$('clientId').value='web-zoneA-'+Math.random().toString(16).slice(2,7);
+</script>
+</body>
+</html>
